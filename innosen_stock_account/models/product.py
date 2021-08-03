@@ -1,5 +1,5 @@
 from odoo.exceptions import UserError
-from odoo.addons.stock_account.models.product_product import ProductProduct as OriginalProductProduct
+from odoo.addons.stock_account.models.product import ProductProduct as OriginalProductProduct
 
 def _change_standard_price(self, new_price):
     """Helper to create the stock valuation layers and the account moves
