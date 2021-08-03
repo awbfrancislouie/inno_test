@@ -1,4 +1,6 @@
+from odoo import api, fields, models, tools, _
 from odoo.exceptions import UserError
+from odoo.tools import float_is_zero, float_repr
 from odoo.addons.stock_account.models.product import ProductTemplate as OriginalProductTemplate
 from odoo.addons.stock_account.models.product import ProductProduct as OriginalProductProduct
 
@@ -46,21 +48,19 @@ def write(self, vals):
     # Create the account moves.
     if move_vals_list:
         account_moves = self.env['account.move'].create(move_vals_list)
+        # removed 08/03/2021
+        account_moves.post()
     return res
 
 OriginalProductTemplate.write = write
 
-
-def _change_standard_price(self, new_price):
+def _change_standard_price(self, new_price, counterpart_account_id=False):
     """Helper to create the stock valuation layers and the account moves
     after an update of standard price.
+
     :param new_price: new standard price
     """
     # Handle stock valuation layers.
-
-    if self.filtered(lambda p: p.valuation == 'real_time') and not self.env['stock.valuation.layer'].check_access_rights('read', raise_exception=False):
-        raise UserError(_("You cannot update the cost of a product in automated valuation as it leads to the creation of a journal entry, for which you don't have the access rights."))
-
     svl_vals_list = []
     company_id = self.env.company
     for product in self:
@@ -95,44 +95,31 @@ def _change_standard_price(self, new_price):
             continue
 
         # Sanity check.
-        if not product_accounts[product.id].get('expense'):
-            raise UserError(_('You must set a counterpart account on your product category.'))
+        if counterpart_account_id is False:
+            raise UserError(_('You must set a counterpart account.'))
         if not product_accounts[product.id].get('stock_valuation'):
             raise UserError(_('You don\'t have any stock valuation account defined on your product category. You must define one before processing this operation.'))
 
         if value < 0:
-            debit_account_id = product_accounts[product.id]['expense'].id
+            debit_account_id = counterpart_account_id
             credit_account_id = product_accounts[product.id]['stock_valuation'].id
         else:
             debit_account_id = product_accounts[product.id]['stock_valuation'].id
-            credit_account_id = product_accounts[product.id]['expense'].id
+            credit_account_id = counterpart_account_id
 
         move_vals = {
             'journal_id': product_accounts[product.id]['stock_journal'].id,
             'company_id': company_id.id,
             'ref': product.default_code,
             'stock_valuation_layer_ids': [(6, None, [stock_valuation_layer.id])],
-            'move_type': 'entry',
             'line_ids': [(0, 0, {
-                'name': _(
-                    '%(user)s changed cost from %(previous)s to %(new_price)s - %(product)s',
-                    user=self.env.user.name,
-                    previous=product.standard_price,
-                    new_price=new_price,
-                    product=product.display_name
-                ),
+                'name': _('%s changed cost from %s to %s - %s') % (self.env.user.name, product.standard_price, new_price, product.display_name),
                 'account_id': debit_account_id,
                 'debit': abs(value),
                 'credit': 0,
                 'product_id': product.id,
             }), (0, 0, {
-                'name': _(
-                    '%(user)s changed cost from %(previous)s to %(new_price)s - %(product)s',
-                    user=self.env.user.name,
-                    previous=product.standard_price,
-                    new_price=new_price,
-                    product=product.display_name
-                ),
+                'name': _('%s changed cost from %s to %s - %s') % (self.env.user.name, product.standard_price, new_price, product.display_name),
                 'account_id': credit_account_id,
                 'debit': 0,
                 'credit': abs(value),
@@ -140,7 +127,12 @@ def _change_standard_price(self, new_price):
             })],
         }
         am_vals_list.append(move_vals)
+    account_moves = self.env['account.move'].create(am_vals_list)
+    # removed 08/03/2021
+    # if account_moves:
+    #     account_moves.post()
 
-    account_moves = self.env['account.move'].sudo().create(am_vals_list)
+    # Actually update the standard price.
+    self.with_context(force_company=company_id.id).sudo().write({'standard_price': new_price})
 
 OriginalProductProduct._change_standard_price = _change_standard_price
